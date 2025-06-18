@@ -1,10 +1,10 @@
 from rest_framework import serializers
-from .models import ProductionEntry
+from .models import ProductionData
 from django.contrib.auth.models import User
 
-class ProductionEntrySerializer(serializers.ModelSerializer):
+class ProductionDataSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ProductionEntry
+        model = ProductionData
         fields = '__all__'
 
 class UserSerializer(serializers.ModelSerializer):
