@@ -1,55 +1,77 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from production.models import ProductionData
-from django.utils.timezone import now
 from django.http import HttpResponse
-from django.core import serializers
+from django.core.serializers.json import DjangoJSONEncoder
+import json
 import zipfile
 import io
-from django.views.decorators.csrf import csrf_exempt
-from django.shortcuts import redirect
-import json
+from django.utils.timezone import now
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from production.models import ProductionData
 
-class DashboardOverviewView(APIView):
+
+class ExportRawProductionData(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
         today = now().date()
 
-        entries_today = ProductionData.objects.filter(user=user, timestamp__date=today)
+        entries = ProductionData.objects.filter(user=user).order_by('-date')
+        if not entries.exists():
+            return Response({"error": "Aucune donnée disponible"}, status=404)
 
-        total_today_kWh = sum(e.energy_today for e in entries_today)
-        current_power = entries_today.last().current_power if entries_today.exists() else 0
-        count_entries = entries_today.count()
+        raw_data = []
+        for entry in entries:
+            raw_data.append({
+                "date": entry.date.isoformat(),
+                "plant_id": entry.plant_id,
+                "power_now": entry.power_now,
+                "energy_today": entry.energy_today,
+                "energy_month": entry.energy_month,
+                "energy_total": entry.energy_total
+            })
+
+        # Crée un fichier ZIP contenant un fichier JSON
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
+            json_data = json.dumps(raw_data, cls=DjangoJSONEncoder, indent=2)
+            z.writestr("production_data.json", json_data)
+        buffer.seek(0)
+
+        response = HttpResponse(buffer, content_type="application/zip")
+        response['Content-Disposition'] = 'attachment; filename=production_export.zip'
+        return response
+
+
+class DashboardSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        today = now().date()
+        start_month = today.replace(day=1)
+        start_year = today.replace(month=1, day=1)
+
+        queryset = ProductionData.objects.filter(user=user)
+
+        def sum_field(queryset, field_name):
+            return round(sum(getattr(entry, field_name, 0) or 0 for entry in queryset), 2)
+
+        data_today = queryset.filter(date=today)
+        data_month = queryset.filter(date__gte=start_month)
+        data_year = queryset.filter(date__gte=start_year)
+        data_all = queryset
 
         return Response({
-            "today_total_kWh": round(total_today_kWh, 2),
-            "current_power_W": current_power,
-            "entries_count_today": count_entries
+            "summary": {
+                "today_energy": sum_field(data_today, "energy_today"),
+                "month_energy": sum_field(data_month, "energy_today"),
+                "year_energy": sum_field(data_year, "energy_today"),
+                "total_energy": sum_field(data_all, "energy_today"),
+            },
+            "last_entry": {
+                "date": data_today.first().date if data_today.exists() else "N/A",
+                "power_now": data_today.first().power_now if data_today.exists() else "N/A"
+            }
         })
-
-def export_data(request):
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as z:
-        for model in ['production.production', 'auth.user']:
-            data = serializers.serialize('json', globals()['apps'].get_model(model).objects.all())
-            z.writestr(f"{model}.json", data)
-    buffer.seek(0)
-    response = HttpResponse(buffer, content_type='application/zip')
-    response['Content-Disposition'] = 'attachment; filename=solar_backup.zip'
-    return response
-
-@csrf_exempt
-def import_data(request):
-    if request.method == "POST" and request.FILES.get('zipfile'):
-        zip_file = request.FILES['zipfile']
-        with zipfile.ZipFile(zip_file) as z:
-            for file in z.namelist():
-                raw = z.read(file).decode()
-                data = json.loads(raw)
-                for obj in serializers.deserialize("json", json.dumps(data)):
-                    obj.save()
-        return HttpResponse("Données importées avec succès.")
-    return HttpResponse("Fichier manquant ou méthode incorrecte.", status=400)

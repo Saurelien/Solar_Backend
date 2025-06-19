@@ -48,6 +48,13 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'API Production Solaire',
+    'DESCRIPTION': 'API privée pour la visualisation des données Growatt et météo',
+    'VERSION': '1.0.0',
 }
 
 TEMPLATES = [

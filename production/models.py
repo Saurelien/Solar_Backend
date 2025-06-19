@@ -28,3 +28,11 @@ class GrowattCredential(models.Model):
 
     def __str__(self):
         return f"Growatt API Credentials for {self.user.username}"
+
+
+class WeatherCredential(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    api_key = models.CharField(max_length=128)
+
+    def __str__(self):
+        return f"OpenWeather API Key for {self.user.username}"
