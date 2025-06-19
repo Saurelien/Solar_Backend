@@ -1,160 +1,123 @@
-from rest_framework import status, permissions, viewsets
-from .models import ProductionData
-from datetime import date
-from growatt import Growatt
-import traceback
-from .models import GrowattCredential
+from .models import GrowattCredential, ProductionData
+from django.utils.timezone import now
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .serializers import ProductionDataSerializer
-from django.contrib.auth.models import User
-from rest_framework.permissions import IsAdminUser
-from production.serializers import UserSerializer
+import growattServer
+from django.core.exceptions import ObjectDoesNotExist
 
-
-class GrowattSyncView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class GrowattV1OverviewView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        email = request.data.get("email")
-        password = request.data.get("password")
-
-        if not email or not password:
-            return Response({"error": "Email et mot de passe requis"}, status=400)
+        raw_token = request.data.get("token")
+        if not raw_token:
+            return Response({"error": "Token requis"}, status=400)
 
         try:
-            api = Growatt()
-            api.login(email, password)
-            plant = api.get_plants()[0]
-            plant_id = plant["id"]
-            detail = api.get_plant(plant_id)
+            creds = GrowattCredential.objects.get(user=request.user)
+        except GrowattCredential.DoesNotExist:
+            return Response({"error": "Aucun token enregistré"}, status=404)
 
-            # Stockage dans la base
+        if not creds.check_token(raw_token):
+            return Response({"error": "Token invalide"}, status=403)
+
+        # ✔️ Token validé → démarrer appel Growatt
+        try:
+            api = growattServer.OpenApiV1(token=raw_token)
+            plants = api.plant_list()
+
+            if 'plants' not in plants or not plants['plants']:
+                return Response({"error": "Aucune installation détectée"}, status=404)
+
+            plant = plants['plants'][0]
+            plant_id = plant['plant_id']
+            plant_name = plant.get('name', 'Inconnu')
+            plant_city = plant.get('city', 'Inconnu')
+
+            data = api.plant_energy_overview(plant_id)
+
+            tz_map = {
+                "GMT+2": "France (UTC+2)",
+                "GMT+1": "France (UTC+1)",
+                "UTC": "UTC",
+            }
+            tz_human = tz_map.get(data.get("timezone", ""), data.get("timezone", "Inconnu"))
+            efficiency = data.get("efficiency")
+            efficiency_str = f"{efficiency} %" if efficiency else "Non communiqué"
+
             ProductionData.objects.update_or_create(
-                user_email=email,
-                date=date.today(),
+                user=request.user,
+                plant_id=plant_id,
+                date=now().date(),
                 defaults={
-                    "plant_id": plant_id,
-                    "power_now": float(detail.get("nominalPower", 0)),
-                    "energy_today": float(detail.get("eTotal", 0)),
-                    "energy_month": float(detail.get("formulaMoney", 0)),  # à ajuster si autre champ
-                    "energy_total": float(detail.get("eTotal", 0)),
+                    "power_now": float(data.get("current_power", 0)),
+                    "energy_today": float(data.get("today_energy", 0)),
+                    "energy_month": float(data.get("monthly_energy", 0)),
+                    "energy_total": float(data.get("total_energy", 0)),
                 }
             )
 
             return Response({
-                "plant": detail.get("plantName"),
-                "total_energy": detail.get("eTotal"),
-                "power": detail.get("nominalPower"),
-                "co2": detail.get("co2"),
-                "trees": detail.get("tree")
-            })
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
-
-
-class FetchGrowattProductionView(APIView):
-    def post(self, request):
-        username = request.data.get("username")
-        password = request.data.get("password")
-
-        if not username or not password:
-            return Response({"error": "Username and password required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            api = Growatt()
-            api.login(username, password)
-
-            plants = api.get_plants()
-            plant_id = plants[0]["id"]
-            detail = api.get_plant(plant_id)
-
-            data = {
-                "plantName": detail.get("plantName"),
-                "country": detail.get("country"),
-                "city": detail.get("city"),
-                "creationDate": detail.get("creatDate"),
-                "nominalPower": f'{detail.get("nominalPower")} W',
-                "energyTotal": f'{detail.get("eTotal")} kWh',
-                "energyToday": f'{detail.get("etoday")} kWh',
-                "energyMonth": f'{detail.get("emonth")} kWh',
-                "energyYear": f'{detail.get("eyear")} kWh',
-                "co2": f'{detail.get("co2")} kg',
-                "tree": detail.get("tree"),
-                "currency": detail.get("moneyUnitText")
-            }
-
-            return Response(data, status=200)
-
-        except Exception as e:
-            return Response({
-                "error": str(e),
-                "trace": traceback.format_exc()
-            }, status=500)
-
-
-# production/views.py
-class StoreGrowattCredentialsView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        email = request.data.get("email")
-        password = request.data.get("password")
-
-        if not email or not password:
-            return Response({"error": "Email et mot de passe requis"}, status=400)
-
-        creds, created = GrowattCredential.objects.get_or_create(user=request.user)
-        creds.email = email
-        creds.set_password(password)
-        creds.save()
-
-        return Response({"message": "Identifiants sauvegardés avec succès."})
-
-
-class SyncWithStoredCredentialsView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        try:
-            creds = GrowattCredential.objects.get(user=request.user)
-        except GrowattCredential.DoesNotExist:
-            return Response({"error": "Aucun identifiant enregistré."}, status=404)
-
-        api = Growatt()
-        if not creds.check_password(request.data.get("password", "")):
-            return Response({"error": "Mot de passe API invalide."}, status=403)
-
-        try:
-            api.login(creds.email, request.data["password"])
-            plant = api.get_plants()[0]
-            detail = api.get_plant(plant["id"])
-
-            return Response({
-                "plant": detail.get("plantName"),
+                "plant": {
+                    "id": plant_id,
+                    "name": plant_name,
+                    "city": plant_city,
+                    "timezone": tz_human,
+                    "last_update": data.get("last_update_time", "N/A"),
+                },
                 "production": {
-                    "today": detail.get("etoday"),
-                    "month": detail.get("emonth"),
-                    "year": detail.get("eyear"),
-                    "total": detail.get("eTotal"),
+                    "today": data.get("today_energy", "N/A"),
+                    "month": data.get("monthly_energy", "N/A"),
+                    "year": data.get("yearly_energy", "N/A"),
+                    "total": data.get("total_energy", "N/A"),
+                    "co2_saved": data.get("carbon_offset", "N/A"),
+                    "efficiency": efficiency_str,
+                    "power_now": data.get("current_power", "N/A"),
                 }
             })
+
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+# production/views.py
+
+# ✅ Vue pour enregistrer un token hashé
+class StoreGrowattTokenView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        raw_token = request.data.get("token")
+        if not raw_token:
+            return Response({"error": "Token requis"}, status=400)
+
+        creds, _ = GrowattCredential.objects.get_or_create(user=request.user)
+        creds.set_token(raw_token)
+        creds.save()
+
+        return Response({"message": "Token enregistré avec succès (hashé avec Argon2)."})
 
 
-class ProductionEntryViewSet(viewsets.ModelViewSet):
-    queryset = ProductionData.objects.all()
-    serializer_class = ProductionDataSerializer
-    permission_classes = [permissions.IsAuthenticated]
+# ✅ Vue pour utiliser un token hashé
+class UseGrowattTokenView(APIView):
+    permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        return self.queryset.filter(user=self.request.user)
+    def post(self, request):
+        raw_token = request.data.get("token")
+        if not raw_token:
+            return Response({"error": "Token manquant"}, status=400)
 
+        try:
+            creds = GrowattCredential.objects.get(user=request.user)
+        except ObjectDoesNotExist:
+            return Response({"error": "Aucun token enregistré"}, status=404)
 
-class UserViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
-    permission_classes = [IsAdminUser]
+        if not creds.check_token(raw_token):
+            return Response({"error": "Token invalide"}, status=403)
+
+        # ✔️ Si le token est correct → récupération Growatt
+        try:
+            api = growattServer.OpenApiV1(token=raw_token)
+            plants = api.plant_list()
+            return Response({"plants": plants})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)

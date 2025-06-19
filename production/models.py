@@ -19,13 +19,12 @@ class GrowattCredential(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     email = models.EmailField()
     password_hash = models.CharField(max_length=255)
-    created_at = models.DateTimeField(default=timezone.now)
 
-    def set_password(self, raw_password):
-        self.password_hash = make_password(raw_password, hasher='argon2')
+    def set_token(self, raw_token):
+        self.password_hash = make_password(raw_token, hasher='argon2')
 
-    def check_password(self, raw_password):
-        return check_password(raw_password, self.password_hash)
+    def check_token(self, raw_token):
+        return check_password(raw_token, self.password_hash)
 
     def __str__(self):
         return f"Growatt API Credentials for {self.user.username}"

@@ -21,12 +21,9 @@ from rest_framework.authtoken.views import obtain_auth_token
 
 from accounts.views import RegisterView
 from dashboard.views import DashboardOverviewView, export_data, import_data
-from production.views import (ProductionEntryViewSet, UserViewSet, GrowattSyncView, FetchGrowattProductionView,
-                              StoreGrowattCredentialsView, SyncWithStoredCredentialsView)
+from production.views import GrowattV1OverviewView, StoreGrowattTokenView, UseGrowattTokenView
 
 router = DefaultRouter()
-router.register(r'production', ProductionEntryViewSet, basename='production')
-router.register(r'users', UserViewSet, basename='users')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -35,10 +32,9 @@ urlpatterns = [
     path('api/dashboard/overview/', DashboardOverviewView.as_view(), name='dashboard-overview'),
     path('api/dashboard/export/', export_data, name='export_data'),
     path('api/dashboard/import/', import_data, name='import_data'),
-    path('api/growatt/sync/', GrowattSyncView.as_view(), name='growatt-sync'),
-    path('api/shine/fetch/production/', FetchGrowattProductionView.as_view(), name='fetch-production'),
-    path('api/growatt/store_credentials/', StoreGrowattCredentialsView.as_view(), name='store-credentials'),
-    path('api/growatt/sync_secure/', SyncWithStoredCredentialsView.as_view(), name='sync-with-creds'),
+    path('api/growatt/v1/overview/', GrowattV1OverviewView.as_view(), name='growatt-v1-overview'),
+    path('api/growatt/token/store/', StoreGrowattTokenView.as_view(), name='store-growatt-token'),
+    path('api/growatt/token/use/', UseGrowattTokenView.as_view(), name='use-growatt-token'),
 ]
 
 # Ajouter les routes DRF au fur et a mesure
